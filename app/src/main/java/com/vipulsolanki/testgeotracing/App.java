@@ -9,6 +9,8 @@ import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.location.LocationListener;
 import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationServices;
+import com.squareup.otto.Bus;
+import com.vipulsolanki.testgeotracing.model.LocationUpdateEvent;
 import com.vipulsolanki.testgeotracing.model.LocationUpdateModel;
 
 import io.realm.Realm;
@@ -27,11 +29,13 @@ public class App extends Application
     private LocationRequest mLocationRequest;
 
     private static App sApplication;
+    private static Bus ottoBus;
 
     @Override
     public void onCreate() {
         super.onCreate();
         sApplication = this;
+        ottoBus = new Bus(App.class.getSimpleName());
         buildGoogleApiClient();
         initRealmDatabase();
     }
@@ -46,6 +50,7 @@ public class App extends Application
     public static App get() {
         return sApplication;
     }
+    public static Bus getBus() { return ottoBus; }
 
     protected synchronized void buildGoogleApiClient() {
         mGoogleApiClient = new GoogleApiClient.Builder(this)
@@ -59,9 +64,9 @@ public class App extends Application
     public boolean requestLocationUpdates() {
         if (mGoogleApiClient.isConnected()) {
             mLocationRequest = new LocationRequest();
-            mLocationRequest.setInterval(MILLISECONDS.convert(30, SECONDS));
-            mLocationRequest.setFastestInterval(MILLISECONDS.convert(10, SECONDS));
-            mLocationRequest.setSmallestDisplacement(50);
+            mLocationRequest.setInterval(MILLISECONDS.convert(10, SECONDS));
+            mLocationRequest.setFastestInterval(MILLISECONDS.convert(5, SECONDS));
+            mLocationRequest.setSmallestDisplacement(10);
             mLocationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
             LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, mLocationRequest, this);
             return true;
@@ -110,6 +115,8 @@ public class App extends Application
         } finally {
             realm.close();
         }
+
+        ottoBus.post(new LocationUpdateEvent(location, timestamp));
     }
 
 }

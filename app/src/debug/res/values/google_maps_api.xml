@@ -17,4 +17,8 @@
     -->
     <string name="google_maps_key" templateMergeStrategy="preserve"
             translatable="false">AIzaSyDeS_19Ce0-O0AC_Ipw1bwUxyba1iStWIk</string>
+
+    <!-- This is server key for directions api-->
+    <string name="google_maps_server_key" templateMergeStrategy="preserve"
+            translatable="false" >AIzaSyBcs5TxNtLrr5iJdqOqD1pQVLagScfp9RI</string>
 </resources>
