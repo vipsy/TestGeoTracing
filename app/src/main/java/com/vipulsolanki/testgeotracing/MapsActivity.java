@@ -3,7 +3,9 @@ package com.vipulsolanki.testgeotracing;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.location.Location;
 import android.os.Bundle;
+import android.support.annotation.ColorRes;
 import android.support.v4.app.FragmentActivity;
 import android.util.Log;
 import android.view.View;
@@ -23,6 +25,7 @@ import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.maps.DirectionsApi;
 import com.google.maps.DirectionsApiRequest;
@@ -39,6 +42,8 @@ import com.vipulsolanki.testgeotracing.model.LocationUpdateModel;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -76,6 +81,10 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private List<com.google.maps.model.LatLng> partialTracedRoute = new ArrayList<>(8);
     private com.google.maps.model.LatLng originPoint;
     private com.google.maps.model.LatLng latestPoint;
+    private Polyline partialPolyline;
+    private MarkerOptions currentMarkerOptions;
+    private Marker currentMarker;
+    private Deviation[] deviations;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,6 +95,12 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
         mapFragment.getMapAsync(this);
+
+        currentMarkerOptions = new MarkerOptions()
+                .icon(BitmapDescriptorFactory.fromResource(R.drawable.ic_location))
+                .flat(true)
+                .anchor(0.5f, 0.5f)
+                .visible(true);
 
         btnStart = (Button) findViewById(R.id.btn_start);
         btnStop = (Button) findViewById(R.id.btn_stop);
@@ -152,6 +167,11 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             Toast.makeText(this, "Some error, but who cares?", Toast.LENGTH_SHORT).show();
         }
         trackingState = TrackState.NAVIGATION_ENDED;
+
+        calcDeviations(selectedRoute.overviewPolyline.decodePath(), actualRoute);
+        analyzeDeviations();
+        drawDeviation();
+
     }
 
     private void onButtonDraw() {
@@ -276,11 +296,123 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
     }
 
-    private void drawPath(List<com.google.maps.model.LatLng> latLngList,
-                          int lineColor,
-                          MarkerOptions startMarker,
-                          MarkerOptions endMarker) {
+    class Deviation {
+        Deviation(float meters, boolean bDeviated) {
+            this.meters = meters;
+            this.bDeviated = bDeviated;
+        }
 
+        @Override
+        public String toString() {
+            return "meters : " + meters + " ; bDeviated:" + bDeviated;
+        }
+
+        float meters;
+        boolean bDeviated;
+    }
+
+    private void calcDeviations(List<com.google.maps.model.LatLng> route, List<com.google.maps.model.LatLng> actualRoute) {
+        float[] resultParam = new float[2];
+        deviations = new Deviation[actualRoute.size()];
+        for (int i = 0; i < deviations.length; i++) {
+            deviations[i] = new Deviation(0, false);
+        }
+
+        int counter = 0;
+        for (com.google.maps.model.LatLng latLng : actualRoute) {
+            float result = Float.MAX_VALUE;
+            for (com.google.maps.model.LatLng latlngRoute : route) {
+                Location.distanceBetween(latLng.lat, latLng.lng, latlngRoute.lat, latlngRoute.lng, resultParam);
+                result = Math.min(result, resultParam[0]);
+            }
+
+            Deviation deviation = deviations[counter++];
+            deviation.meters = result;
+            deviation.bDeviated = result > 99 ? true : false;
+        }
+    }
+
+    private void analyzeDeviations() {
+        final int MAX_DEVIATION_TOLERANCE = 3;
+        int deviationStartIndex = -1;
+        int counter = 0;
+
+        for (int i = 0; i < deviations.length; i++) {
+            Deviation deviation = deviations[i];
+            if (deviation.bDeviated) {
+                if (deviationStartIndex == -1) {
+                    deviationStartIndex = i;
+                    counter = 1;
+                } else {
+                    counter++;
+                }
+            } else {
+                if (counter > MAX_DEVIATION_TOLERANCE) {
+                    for (int j = deviationStartIndex; j < i; j++) {
+                        deviation.bDeviated = true;
+                    }
+                } else {
+                    for (int j = deviationStartIndex; j < i; j++) {
+                        deviation.bDeviated = false;
+                    }
+                }
+                counter = 0;
+            }
+        }
+    }
+
+    class DeviationPaths {
+        private PolylineOptions options = null;
+        public ArrayList<PolylineOptions> polylineOptions= new ArrayList<>();
+
+        DeviationPaths() {
+        }
+
+        public void stop() {
+            if (options != null) {
+                polylineOptions.add(options);
+                options = null;
+            }
+        }
+
+        public PolylineOptions add(LatLng latLng) {
+            if (options == null) options = new PolylineOptions();
+            return options.add(latLng);
+        }
+    }
+
+    private void drawDeviation() {
+        if (deviations == null || deviations.length == 0) {
+            return;
+        }
+
+        DeviationPaths deviationPaths = new DeviationPaths();
+
+        for (int i = 0; i < deviations.length; i++) {
+            Deviation deviation = deviations[i];
+            if (deviation.bDeviated == true) {
+                deviationPaths.add(latLngFromModel(actualRoute.get(i)));
+
+            } else {
+                deviationPaths.stop();
+            }
+
+        }
+
+        deviationPaths.stop();
+
+        for (int i = 0; i < deviationPaths.polylineOptions.size(); i++) {
+            PolylineOptions options = deviationPaths.polylineOptions.get(i);
+            options.width(30);
+            options.color(Color.RED);
+            mMap.addPolyline(options);
+        }
+
+
+    }
+
+
+    private Polyline drawPath(List<com.google.maps.model.LatLng> latLngList, int lineColor) {
         if (latLngList != null && latLngList.size() > 0) {
             PolylineOptions polylineOptions = new PolylineOptions();
             //mMap.clear();
@@ -289,34 +421,35 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             }
             polylineOptions.width(Math.round(mMap.getCameraPosition().zoom * 1.25));
             polylineOptions.color(lineColor);
-            mMap.addPolyline(polylineOptions);
-
-            if (startMarker != null) {
-                LatLng firstPoint = new LatLng(latLngList.get(0).lat, latLngList.get(0).lng);
-                mMap.addMarker(startMarker.position(firstPoint));
-            }
-            if (endMarker != null) {
-                LatLng endPoint = new LatLng(latLngList.get(latLngList.size()-1).lat, latLngList.get(latLngList.size()-1).lng);
-                mMap.addMarker(endMarker.position(endPoint));
-            }
+            return mMap.addPolyline(polylineOptions);
         }
 
+        return null;
+    }
+
+    private LatLng latLngFromModel(com.google.maps.model.LatLng modelLatLng) {
+        return new LatLng(modelLatLng.lat, modelLatLng.lng);
     }
 
     private void drawRoute(DirectionsRoute route) {
         List<com.google.maps.model.LatLng> latLngList = route.overviewPolyline.decodePath();
 
         MarkerOptions startMarker = new MarkerOptions()
+                .position(latLngFromModel(latLngList.get(0)))
                 .icon(BitmapDescriptorFactory.fromResource(R.drawable.ic_location))
                 .visible(true);
 
         MarkerOptions endMarker = new MarkerOptions()
+                .position(latLngFromModel(latLngList.get(latLngList.size()-1)))
                 .icon(BitmapDescriptorFactory.fromResource(R.drawable.ic_finish_flag))
                 .anchor(0, 1)
                 .visible(true);
 
         mMap.clear();
-        drawPath(latLngList, Color.GREEN, startMarker, endMarker);
+        drawPath(latLngList, Color.GREEN);
+        mMap.addMarker(startMarker);
+        mMap.addMarker(endMarker);
+
     }
 
     private void onSourceSelected(Place place, String attributions) {
@@ -360,10 +493,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @SuppressWarnings("unused")
     @Subscribe
     public void locationAvailable(LocationUpdateEvent event) {
-        //oldRefreshRoute();
-//        if (selectedRoute != null) {
-//            drawRoute(selectedRoute);
-//        }
 
         com.google.maps.model.LatLng currentPoint =
                 new com.google.maps.model.LatLng(event.location.getLatitude(),
@@ -371,61 +500,50 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         partialTracedRoute.add(currentPoint);
 
-        if (partialTracedRoute.size() >= 4) {
+        if (partialTracedRoute.size() >= 5) {
             GeoApiContext context = new GeoApiContext().setApiKey(getString(R.string.google_maps_server_key));
-//            RoadsApi.snapToRoads(context, true, partialTracedRoute.toArray(new com.google.maps.model.LatLng[partialTracedRoute.size()]))
-//                    .setCallback(new PendingResult.Callback<SnappedPoint[]>() {
-//                @Override
-//                public void onResult(SnappedPoint[] result) {
-//                    for (SnappedPoint snappedPoint : result) {
-//                        actualRoute.add(snappedPoint.location);
-//                    }
-//                    if (actualRoute != null && actualRoute.size() > 0) {
-//                        latestPoint = actualRoute.get(actualRoute.size() - 1);
-//                    }
-//                    partialTracedRoute.clear();
-//                    drawPath(actualRoute,
-//                            Color.BLUE,
-//                            null,
-//                            new MarkerOptions()
-//                                    .icon(BitmapDescriptorFactory.fromResource(R.drawable.ic_location))
-//                                    .flat(true)
-//                                    .anchor(0.5f, 0.5f)
-//                                    .visible(true)
-//                    );
-//                }
-//
-//                @Override
-//                public void onFailure(Throwable e) {
-//
-//                }
-//            });
             try {
                 SnappedPoint[] result = RoadsApi.snapToRoads(context, true, partialTracedRoute.toArray(new com.google.maps.model.LatLng[partialTracedRoute.size()]))
                         .await();
 
-                for (SnappedPoint snappedPoint : result) {
-                    actualRoute.add(snappedPoint.location);
-                }
-                if (actualRoute != null && actualRoute.size() > 0) {
+                addSnappedPoints(result);
+                if (actualRoute.size() > 0) {
                     latestPoint = actualRoute.get(actualRoute.size() - 1);
                 }
+                //clear and add the last one so that next snapToRoads call has the last point in it.
                 partialTracedRoute.clear();
-                drawPath(actualRoute,
-                        Color.CYAN,
-                        null,
-                        new MarkerOptions()
-                                .icon(BitmapDescriptorFactory.fromResource(R.drawable.ic_location))
-                                .flat(true)
-                                .anchor(0.5f, 0.5f)
-                                .visible(true)
-                );
+                partialTracedRoute.add(latestPoint);
+                drawPath(actualRoute, Color.CYAN);
+
+                if (currentMarker != null) currentMarker.remove();
+                currentMarker = mMap.addMarker(currentMarkerOptions.position(latLngFromModel(latestPoint)));
 
             } catch (Exception e) {
                 e.printStackTrace();
             }
+        } else {
+            if (partialPolyline != null) {
+                partialPolyline.remove();
+            }
+
+            partialPolyline = drawPath(partialTracedRoute, Color.YELLOW);
+            if (currentMarker != null) currentMarker.remove();
+            currentMarker = mMap.addMarker(currentMarkerOptions.position(latLngFromModel(currentPoint)));
         }
 
+    }
+
+    private void addSnappedPoints(SnappedPoint[] result) {
+        //If the last point in the actualRoute is same as first one in
+        // result then remove it since it makes it duplicate in the whole route.
+        if (actualRoute.size() > 0) {
+            if (actualRoute.get(actualRoute.size()-1) == result[0].location) {
+                actualRoute.remove(actualRoute.size()-1);
+            }
+        }
+        for (SnappedPoint snappedPoint : result) {
+            actualRoute.add(snappedPoint.location);
+        }
     }
 
     @SuppressWarnings("unused")
