@@ -5,7 +5,8 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.location.Location;
 import android.os.Bundle;
-import android.support.annotation.ColorRes;
+import android.os.Handler;
+import android.os.Looper;
 import android.support.v4.app.FragmentActivity;
 import android.util.Log;
 import android.view.View;
@@ -40,11 +41,7 @@ import com.vipulsolanki.testgeotracing.model.CameraChangeEvent;
 import com.vipulsolanki.testgeotracing.model.LocationUpdateEvent;
 import com.vipulsolanki.testgeotracing.model.LocationUpdateModel;
 
-import java.text.DecimalFormat;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 
 import io.realm.Realm;
@@ -81,10 +78,12 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private List<com.google.maps.model.LatLng> partialTracedRoute = new ArrayList<>(8);
     private com.google.maps.model.LatLng originPoint;
     private com.google.maps.model.LatLng latestPoint;
-    private Polyline partialPolyline;
+    private Polyline partialPolyline; //YELLO polyline
+    private Polyline routePolyline; //CYAN, travelled(actual)
     private MarkerOptions currentMarkerOptions;
     private Marker currentMarker;
     private Deviation[] deviations;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -168,45 +167,14 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
         trackingState = TrackState.NAVIGATION_ENDED;
 
-        calcDeviations(selectedRoute.overviewPolyline.decodePath(), actualRoute);
-        analyzeDeviations();
-        drawDeviation();
+        //Get any remaining snapped points
+        //This will also update deviations if any.
+        getSnappedPoints();
 
     }
 
     private void onButtonDraw() {
-        //oldRefreshRoute();
-        if (selectedRoute != null) {
-            //drawRoute(selectedRoute);
-        }
-    }
 
-    private void oldRefreshRoute() {
-        Realm realm = Realm.getDefaultInstance();
-        Iterator<LocationUpdateModel> iter = realm.where(LocationUpdateModel.class).findAll().iterator();
-        PolylineOptions polylineOptions = new PolylineOptions();
-        mMap.clear();
-
-        long polyLineWidth = Math.round(mMap.getCameraPosition().zoom * 1.5);
-        while (iter.hasNext()) {
-            LocationUpdateModel model = iter.next();
-            Log.d(TAG, "DRAW : " + model.getLatitude() + " : " + model.getLongitude());
-            polylineOptions.add(new LatLng(model.getLatitude(), model.getLongitude()))
-                    .width(polyLineWidth)
-                    .color(Color.GREEN);
-
-            if (mMap.getCameraPosition().zoom >= 16.0) {
-                DecimalFormat decimalFormat = new DecimalFormat("#.0");
-                mMap.addMarker(new MarkerOptions()
-                        .title(decimalFormat.format(model.getAccuracy()))
-                        .icon(BitmapDescriptorFactory.fromResource(R.drawable.ic_location))
-                        .anchor(0.5f, 0.5f)
-                        .flat(false)
-                        .position(new LatLng(model.getLatitude(), model.getLongitude())));
-            }
-        }
-        mMap.addPolyline(polylineOptions);
-        realm.close();
     }
 
     private void onButtonList() {
@@ -278,8 +246,8 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         GeoApiContext context = new GeoApiContext().setApiKey(getString(R.string.google_maps_server_key));
 
         DirectionsApiRequest request = DirectionsApi.getDirections(context,
-                sourcePlace.getAddress().toString(),
-                destinationPlace.getAddress().toString())
+                "place_id:" + sourcePlace.getId(),
+                "place_id:" + destinationPlace.getId())
                 .mode(TravelMode.DRIVING);
 
         try {
@@ -292,8 +260,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         } catch (Exception e) {
             e.printStackTrace();
         }
-
-
     }
 
     class Deviation {
@@ -314,6 +280,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private void calcDeviations(List<com.google.maps.model.LatLng> route, List<com.google.maps.model.LatLng> actualRoute) {
         float[] resultParam = new float[2];
         deviations = new Deviation[actualRoute.size()];
+        //Initializing
         for (int i = 0; i < deviations.length; i++) {
             deviations[i] = new Deviation(0, false);
         }
@@ -323,7 +290,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             float result = Float.MAX_VALUE;
             for (com.google.maps.model.LatLng latlngRoute : route) {
                 Location.distanceBetween(latLng.lat, latLng.lng, latlngRoute.lat, latlngRoute.lng, resultParam);
-                result = Math.min(result, resultParam[0]);
+                result = Math.min(result, resultParam[0]); //resultParam[0] is distanceBetween.
             }
 
             Deviation deviation = deviations[counter++];
@@ -339,14 +306,14 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         for (int i = 0; i < deviations.length; i++) {
             Deviation deviation = deviations[i];
-            if (deviation.bDeviated) {
+            if (deviation.bDeviated) { //TRUE
                 if (deviationStartIndex == -1) {
                     deviationStartIndex = i;
                     counter = 1;
                 } else {
                     counter++;
                 }
-            } else {
+            } else { //FALSE
                 if (counter > MAX_DEVIATION_TOLERANCE) {
                     for (int j = deviationStartIndex; j < i; j++) {
                         deviation.bDeviated = true;
@@ -361,9 +328,9 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
     }
 
-    class DeviationPaths {
+    class DeviationPaths { //All Deviations polylines(RED).
         private PolylineOptions options = null;
-        public ArrayList<PolylineOptions> polylineOptions= new ArrayList<>();
+        public ArrayList<PolylineOptions> polylineOptions= new ArrayList<>(); //List of RED arcs.
 
         DeviationPaths() {
         }
@@ -401,10 +368,12 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         deviationPaths.stop();
 
+        //Draws all RED lines.
         for (int i = 0; i < deviationPaths.polylineOptions.size(); i++) {
             PolylineOptions options = deviationPaths.polylineOptions.get(i);
-            options.width(30);
-            options.color(Color.RED);
+            options.width(25)
+                    .zIndex(2)
+                    .color(Color.RED);
             mMap.addPolyline(options);
         }
 
@@ -457,15 +426,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         trackingState = TrackState.START_SELECTED;
     }
 
-    /**
-     * Manipulates the map once available.
-     * This callback is triggered when the map is ready to be used.
-     * This is where we can add markers or lines, add listeners or move the camera. In this case,
-     * we just add a marker near Sydney, Australia.
-     * If Google Play services is not installed on the device, the user will be prompted to install
-     * it inside the SupportMapFragment. This method will only be triggered once the user has
-     * installed Google Play services and returned to the app.
-     */
+
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
@@ -501,23 +462,8 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         partialTracedRoute.add(currentPoint);
 
         if (partialTracedRoute.size() >= 5) {
-            GeoApiContext context = new GeoApiContext().setApiKey(getString(R.string.google_maps_server_key));
             try {
-                SnappedPoint[] result = RoadsApi.snapToRoads(context, true, partialTracedRoute.toArray(new com.google.maps.model.LatLng[partialTracedRoute.size()]))
-                        .await();
-
-                addSnappedPoints(result);
-                if (actualRoute.size() > 0) {
-                    latestPoint = actualRoute.get(actualRoute.size() - 1);
-                }
-                //clear and add the last one so that next snapToRoads call has the last point in it.
-                partialTracedRoute.clear();
-                partialTracedRoute.add(latestPoint);
-                drawPath(actualRoute, Color.CYAN);
-
-                if (currentMarker != null) currentMarker.remove();
-                currentMarker = mMap.addMarker(currentMarkerOptions.position(latLngFromModel(latestPoint)));
-
+                getSnappedPoints();
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -531,6 +477,57 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             currentMarker = mMap.addMarker(currentMarkerOptions.position(latLngFromModel(currentPoint)));
         }
 
+    }
+
+    private void getSnappedPoints() {
+        GeoApiContext context = new GeoApiContext().setApiKey(getString(R.string.google_maps_server_key));
+        RoadsApi.snapToRoads(context, true, partialTracedRoute.toArray(new com.google.maps.model.LatLng[partialTracedRoute.size()]))
+                .setCallback(new PendingResult.Callback<SnappedPoint[]>() {
+                    @Override
+                    public void onResult(SnappedPoint[] result) {
+                        addSnappedPoints(result);
+                        if (actualRoute.size() > 0) {
+                            latestPoint = actualRoute.get(actualRoute.size() - 1);
+                        }
+
+                        Handler h = new Handler(Looper.getMainLooper());
+                        h.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                //clear and add the last one so that next snapToRoads call has the last point in it.
+                                partialTracedRoute.clear();
+                                partialTracedRoute.add(latestPoint);
+
+                                //Clear partial polyline - YELLOW
+                                if (partialPolyline != null) {
+                                    partialPolyline.remove();
+                                    partialPolyline = null;
+                                }
+                                //Clear route polyline - CYAN(travelled)
+                                if (routePolyline != null) {
+                                    routePolyline.remove();
+                                    routePolyline = null;
+                                }
+
+                                routePolyline = drawPath(actualRoute, Color.CYAN);
+
+                                if (currentMarker != null) currentMarker.remove();
+                                currentMarker = mMap.addMarker(currentMarkerOptions.position(latLngFromModel(latestPoint)));
+
+                                //Deviations
+                                calcDeviations(selectedRoute.overviewPolyline.decodePath(), actualRoute); // expected, actual
+                                analyzeDeviations();
+                                drawDeviation();
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onFailure(Throwable e) {
+                        Log.e(TAG, e.getMessage());
+                        e.printStackTrace();
+                    }
+                });
     }
 
     private void addSnappedPoints(SnappedPoint[] result) {
@@ -549,9 +546,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @SuppressWarnings("unused")
     @Subscribe
     public void cameraChanged(CameraChangeEvent event) {
-        //oldRefreshRoute();
-//        if (selectedRoute != null) {
-//            drawRoute(selectedRoute);
-//        }
     }
+
 }
